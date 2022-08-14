@@ -3,3 +3,4 @@ env/*
 async_queues.egg-info/*
 async_queue/__pycache__/*
 dist/*
+build/*

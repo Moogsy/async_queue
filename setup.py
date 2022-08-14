@@ -5,7 +5,7 @@ with open("README.md", "r") as f:
 
 setuptools.setup(
     name="async_queues",
-    version="0.0.2",
+    version="0.0.3",
     author="An Akiyama",
     author_email="saphielle.akiyama@gmail.com",
     description="An attempt to re-create / extend asyncio's current queues",
