@@ -133,6 +133,9 @@ class QueueBase:
         if atleast < 1:
             raise ValueError("Must fetch atleast 1 item")
 
+        if atmost is None:
+            atmost = atleast
+
         if atleast > atmost:
             raise ValueError("Parameter atleast cannot be bigger than parameter atmost")
 
