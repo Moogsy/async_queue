@@ -1,10 +1,10 @@
 import asyncio
-from asyncio import get_event_loop, sleep
-from collections import deque
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Iterator
 
 import errors
+from events import Events
 
 
 class QueueBase:
@@ -22,8 +22,14 @@ class QueueBase:
         if isinstance(maxlen, int) and maxlen < 0:
             maxlen = None
 
+        # Storage
         self.maxlen = maxlen
         self._deque = deque(iterable, maxlen=maxlen)
+
+        self._loop = asyncio.get_event_loop()
+
+        # Events
+        self._listeners = defaultdict(list)
 
     # Timeout helper
 
@@ -44,8 +50,8 @@ class QueueBase:
         if timeout is not None:
             started_at = datetime.now(tz=timezone.utc)
 
-        if self._maxlen is not None:
-            while len(self.deque) > self._maxlen:
+        if self.maxlen is not None:
+            while self.is_full():
                 if timeout is None:
                     await asyncio.sleep(0)
                 else:
@@ -53,15 +59,21 @@ class QueueBase:
 
         self._deque.append(item)
 
+        if self.is_full():
+            self.dispatch_event(Events.Full)
+
     def put_nowait(self, item):
         """
         Ads a single item to the queue.
         Raises Full if the queue is full.
         """
-        if len(self._queue) < self._maxlen or float("inf"):
-            self._deque.append(item)
-        else:
+        if self.is_full():
             raise errors.Full()
+        else:
+            self._deque.append(item)
+
+            if self.is_full():
+                self.dispatch_event(Events.Full)
 
     async def puts(self, *items, atomic: bool = False):
         """
@@ -70,26 +82,33 @@ class QueueBase:
         else, will wait until enough slots are free and add them at once when it happens.
         NOTE: Contiguous addition is not guaranteed if not atomic
         """
-        if atomic:
+        if self.maxlen is None:
+            self._deque.extend(items)
+
+        elif atomic:
             # Hangs until enough room is made
-            while len(items) > (self.maxlen or float("inf")) - len(self._deque):
+            while not self.has_enough_room_for(len(items)):
                 await asyncio.sleep(0)
 
             self._deque.extend(items)
+
+            if self.is_full():
+                self.dispatch_event(Events.Full)
 
         else:
             # Add everything if no maxlen was provided
             while True:
                 # Adds as many items as possible
-                free_slots = (self.maxlen or len(items) + len(self._deque)) - len(
-                    self._deque
-                )
+                free_slots = self.maxlen - len(self._deque)
 
                 self._deque.extend(items[:free_slots])
                 items = items[free_slots:]
 
                 if not items:
                     return
+
+                if self.is_full():
+                    self.dispatch_event(Events.Full)
 
                 await asyncio.sleep(0)
 
@@ -109,11 +128,14 @@ class QueueBase:
         """
         started_at = datetime.now(timezone.utc)
 
-        while not self._deque:
+        while self.is_empty():
             if timeout is None:
                 await asyncio.sleep(0)
             else:
                 await self._check_expiry_date(started_at, timeout)
+
+        if len(self) == 1:
+            self.dispatch_event(Events.Empty)
 
         return self._get()
 
@@ -153,21 +175,30 @@ class QueueBase:
                 item = self._get()
                 out.append(item)
 
-            return out
+            if self.is_empty():
+                self.dispatch_event(Events.Empty)
 
         # Hangs until it collected enough items
+        else:
+            while len(out) < atleast:
+                while not self.is_empty() and len(out) < atleast:
+                    item = self._get()
+                    out.append(item)
 
-        while len(out) < atleast:
-            while self._deque and len(out) < atleast:
-                item = self._get()
-                out.append(item)
+                if self.is_empty():
+                    self.dispatch_event(Events.Empty)
+
+                await asyncio.sleep(0)
 
             await asyncio.sleep(0)
 
-        # Collects items to reach the objective if possible
-        while self._deque and len(out) < atmost:
-            item = self._get()
-            out.append(item)
+            # Collects items to reach the objective if possible
+            while self._deque and len(out) < atmost:
+                item = self._get()
+                out.append(item)
+
+            if self.is_empty():
+                self.dispatch_event(Events.Empty)
 
         return out
 
@@ -177,6 +208,9 @@ class QueueBase:
         Raises Empty if the queue is empty.
         """
         try:
+            if len(self._deque) == 1:
+                self.dispatch_event(Events.Empty)
+
             return self._get()
         except IndexError:
             raise errors.Empty()
@@ -228,7 +262,18 @@ class QueueBase:
         if self.maxlen is None:
             return False
 
-        return self.__len__() == self.maxlen
+        return self.__len__() >= self.maxlen
+
+    def has_enough_room_for(self, n: int):
+        """
+        Returns True if the queue has enough space to add n items
+        """
+        if self.maxlen is None:
+            return True
+
+        free = self.maxlen - len(self._deque)
+
+        return n <= free
 
     def __getitem__(self, index: int):
         return self._deque.__getitem__(index)
@@ -252,8 +297,33 @@ class QueueBase:
             yield await self.get()
 
     # Formatting
+
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({list(map(repr, self._deque))}, maxlen={self.maxlen}))"
+
+    # Events
+    def dispatch_event(self, event: Events):
+        coro = self._dispatch_event(event)
+        self._loop.create_task(coro)
+
+    async def _dispatch_event(self, event: Events):
+        if isinstance(event, Events):
+            event = event.value
+
+        for future in self._listeners[event]:
+            future.set_result(None)
+
+        self._listeners[event].clear()
+
+    def wait_for(self, event: Events, timeout: timedelta = None, check=None):
+        if isinstance(event, Events):
+            event = event.value
+
+        future = self._loop.create_future()
+
+        self._listeners[event].append(future)
+
+        return asyncio.wait_for(future, timeout)
 
 
 class AsyncQueue(QueueBase):

@@ -22,6 +22,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from errors import QueueError, Empty, Full
-from events import Events
-from queues import QueueBase, AsyncLifoQueue, AsyncQueue
+from enum import Enum
+
+
+class Events(Enum):
+    Empty = "empty"
+    Full = "full"
