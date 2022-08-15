@@ -1,11 +1,10 @@
 import asyncio
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Optional
 
 import errors
 from events import Events
-
 
 class QueueBase:
     """
@@ -16,7 +15,7 @@ class QueueBase:
         self,
         iterable: Iterable = [],
         *,
-        maxlen: int = None,
+        maxlen: Optional[int] = None,
     ):
 
         if isinstance(maxlen, int) and maxlen < 0:
@@ -42,7 +41,7 @@ class QueueBase:
 
     # Add stuff
 
-    async def put(self, item, timeout: timedelta = None):
+    async def put(self, item, timeout: Optional[timedelta] = None):
         """
         Adds an item to the queue.
         If the queue is full, will wait until a slot is free
@@ -55,7 +54,7 @@ class QueueBase:
                 if timeout is None:
                     await asyncio.sleep(0)
                 else:
-                    await self._check_expiry_date(started_at, timeout)
+                    await self._check_expiry_date(started_at, timeout)  # type: ignore
 
         self._deque.append(item)
 
@@ -121,7 +120,7 @@ class QueueBase:
         """
         raise NotImplementedError()
 
-    async def get(self, timeout: timedelta = None):
+    async def get(self, timeout: Optional[timedelta] = None):
         """
         Removes and gets an item from the queue.
         If the queue is empty, will wait until an item is put
@@ -142,7 +141,7 @@ class QueueBase:
     async def gets(
         self,
         atleast: int = 0,
-        atmost: int = None,
+        atmost: Optional[int] = None,
         atomic: bool = False,
     ) -> list:
 
@@ -202,7 +201,7 @@ class QueueBase:
 
         return out
 
-    def get_nowait(func, self):
+    def get_nowait(self):
         """
         Retrieves a single item from the queue.
         Raises Empty if the queue is empty.
@@ -315,7 +314,7 @@ class QueueBase:
 
         self._listeners[event].clear()
 
-    def wait_for(self, event: Events, timeout: timedelta = None, check=None):
+    def wait_for(self, event: Events, timeout: Optional[float] = None):
         if isinstance(event, Events):
             event = event.value
 
